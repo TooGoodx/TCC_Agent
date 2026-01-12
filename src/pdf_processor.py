@@ -1,31 +1,54 @@
 """
 Módulo para download e processamento de PDFs do Google Drive.
+Suporta 3 níveis de documentos com hierarquia de importância:
+- metodologia: máxima prioridade
+- principais_2: alta prioridade
+- base_40: contexto adicional
 """
 import os
 import re
+import shutil
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional, BinaryIO
 import gdown
 import pdfplumber
 from PyPDF2 import PdfReader
 
 
 class PDFProcessor:
-    """Processa PDFs: download do Google Drive e extração de texto."""
+    """Processa PDFs: download do Google Drive, upload local e extração de texto."""
 
-    def __init__(self, base_folder_40: str, base_folder_2: str):
+    # Pesos de prioridade para cada categoria
+    CATEGORY_WEIGHTS = {
+        'metodologia': 3.0,
+        'principais_2': 2.0,
+        'base_40': 1.0
+    }
+
+    def __init__(
+        self,
+        base_folder_40: str,
+        base_folder_2: str,
+        base_folder_metodologia: Optional[str] = None
+    ):
         """
         Inicializa o processador de PDFs.
 
         Args:
             base_folder_40: ID da pasta do Google Drive com 40 artigos
             base_folder_2: ID da pasta do Google Drive com 2 artigos principais
+            base_folder_metodologia: ID da pasta do Google Drive com artigos de metodologia (opcional)
         """
         self.base_folder_40 = base_folder_40
         self.base_folder_2 = base_folder_2
+        self.base_folder_metodologia = base_folder_metodologia
         self.referencias_path = Path("referencias")
         self.base_40_path = self.referencias_path / "base_40"
         self.principais_2_path = self.referencias_path / "principais_2"
+        self.metodologia_path = self.referencias_path / "metodologia_upload"
+
+        # Garante que as pastas existem
+        self.metodologia_path.mkdir(parents=True, exist_ok=True)
 
     def download_from_drive(self, folder_id: str, output_path: Path) -> bool:
         """
@@ -77,11 +100,90 @@ class PDFProcessor:
         print("\n2️⃣ Baixando 2 artigos principais...")
         success_2 = self.download_from_drive(self.base_folder_2, self.principais_2_path)
 
-        if success_40 and success_2:
+        # Download dos artigos de metodologia (se configurado)
+        success_metodologia = True
+        if self.base_folder_metodologia:
+            print("\n3️⃣ Baixando artigos de metodologia...")
+            success_metodologia = self.download_from_drive(
+                self.base_folder_metodologia,
+                self.metodologia_path
+            )
+
+        if success_40 and success_2 and success_metodologia:
             print("\n✅ Todos os PDFs foram baixados com sucesso!")
             return True
         else:
             print("\n⚠️ Alguns downloads falharam. Verifique a conexão e permissões.")
+            return False
+
+    def upload_single_pdf(
+        self,
+        uploaded_file: BinaryIO,
+        filename: str,
+        category: str = 'metodologia'
+    ) -> Dict:
+        """
+        Recebe um PDF via upload (Streamlit) e salva localmente.
+
+        Args:
+            uploaded_file: Arquivo uploadado (st.file_uploader)
+            filename: Nome do arquivo
+            category: Categoria do documento ('metodologia', 'principais_2', 'base_40')
+
+        Returns:
+            Dict com informações do PDF processado
+        """
+        # Define o diretório de destino baseado na categoria
+        if category == 'metodologia':
+            dest_path = self.metodologia_path
+        elif category == 'principais_2':
+            dest_path = self.principais_2_path
+        else:
+            dest_path = self.base_40_path
+
+        dest_path.mkdir(parents=True, exist_ok=True)
+
+        # Salva o arquivo
+        file_path = dest_path / filename
+        with open(file_path, 'wb') as f:
+            f.write(uploaded_file.read())
+
+        print(f"✅ PDF salvo em: {file_path}")
+
+        # Extrai texto do PDF
+        pdf_data = self.extract_text_from_pdf(file_path)
+        if pdf_data:
+            pdf_data['category'] = category
+            pdf_data['weight'] = self.CATEGORY_WEIGHTS.get(category, 1.0)
+
+        return pdf_data
+
+    def remove_pdf(self, filename: str, category: str) -> bool:
+        """
+        Remove um PDF da categoria especificada.
+
+        Args:
+            filename: Nome do arquivo
+            category: Categoria do documento
+
+        Returns:
+            bool: True se removido com sucesso
+        """
+        if category == 'metodologia':
+            file_path = self.metodologia_path / filename
+        elif category == 'principais_2':
+            file_path = self.principais_2_path / filename
+        else:
+            file_path = self.base_40_path / filename
+
+        try:
+            if file_path.exists():
+                file_path.unlink()
+                print(f"✅ PDF removido: {file_path}")
+                return True
+            return False
+        except Exception as e:
+            print(f"❌ Erro ao remover PDF: {e}")
             return False
 
     def extract_text_from_pdf(self, pdf_path: Path) -> Dict[str, any]:
@@ -176,28 +278,57 @@ class PDFProcessor:
         """
         all_pdfs = []
 
-        # Processa PDFs da base 40
-        print("\n📚 Processando 40 artigos base...")
-        base_40_pdfs = list(self.base_40_path.glob("**/*.pdf"))
-        for pdf_path in base_40_pdfs:
+        # Processa PDFs de METODOLOGIA (máxima prioridade)
+        print("\n🎯 Processando artigos de METODOLOGIA (prioridade máxima)...")
+        metodologia_pdfs = list(self.metodologia_path.glob("**/*.pdf"))
+        for pdf_path in metodologia_pdfs:
             print(f"  📄 Processando: {pdf_path.name}")
             pdf_data = self.extract_text_from_pdf(pdf_path)
             if pdf_data:
-                pdf_data['category'] = 'base_40'
+                pdf_data['category'] = 'metodologia'
+                pdf_data['weight'] = self.CATEGORY_WEIGHTS['metodologia']
                 all_pdfs.append(pdf_data)
 
-        # Processa PDFs principais
-        print("\n📖 Processando 2 artigos principais...")
+        # Processa PDFs principais (alta prioridade)
+        print("\n⭐ Processando 2 artigos principais (alta prioridade)...")
         principais_pdfs = list(self.principais_2_path.glob("**/*.pdf"))
         for pdf_path in principais_pdfs:
             print(f"  📄 Processando: {pdf_path.name}")
             pdf_data = self.extract_text_from_pdf(pdf_path)
             if pdf_data:
                 pdf_data['category'] = 'principais_2'
+                pdf_data['weight'] = self.CATEGORY_WEIGHTS['principais_2']
+                all_pdfs.append(pdf_data)
+
+        # Processa PDFs da base 40 (contexto)
+        print("\n📚 Processando 40 artigos base (contexto)...")
+        base_40_pdfs = list(self.base_40_path.glob("**/*.pdf"))
+        for pdf_path in base_40_pdfs:
+            print(f"  📄 Processando: {pdf_path.name}")
+            pdf_data = self.extract_text_from_pdf(pdf_path)
+            if pdf_data:
+                pdf_data['category'] = 'base_40'
+                pdf_data['weight'] = self.CATEGORY_WEIGHTS['base_40']
                 all_pdfs.append(pdf_data)
 
         print(f"\n✅ Total de {len(all_pdfs)} PDFs processados!")
+        print(f"   • Metodologia: {len(metodologia_pdfs)}")
+        print(f"   • Principais: {len(principais_pdfs)}")
+        print(f"   • Base: {len(base_40_pdfs)}")
         return all_pdfs
+
+    def get_pdfs_by_category(self) -> Dict[str, List[str]]:
+        """
+        Retorna lista de PDFs organizados por categoria.
+
+        Returns:
+            Dict com listas de nomes de arquivos por categoria
+        """
+        return {
+            'metodologia': [p.name for p in self.metodologia_path.glob("*.pdf")],
+            'principais_2': [p.name for p in self.principais_2_path.glob("*.pdf")],
+            'base_40': [p.name for p in self.base_40_path.glob("*.pdf")]
+        }
 
     def check_pdfs_exist(self) -> Dict[str, bool]:
         """
@@ -208,11 +339,18 @@ class PDFProcessor:
         """
         base_40_exists = len(list(self.base_40_path.glob("*.pdf"))) > 0
         principais_2_exists = len(list(self.principais_2_path.glob("*.pdf"))) > 0
+        metodologia_exists = len(list(self.metodologia_path.glob("*.pdf"))) > 0
 
         return {
             'base_40': base_40_exists,
             'principais_2': principais_2_exists,
-            'all_ready': base_40_exists and principais_2_exists
+            'metodologia': metodologia_exists,
+            'all_ready': base_40_exists and principais_2_exists,
+            'counts': {
+                'metodologia': len(list(self.metodologia_path.glob("*.pdf"))),
+                'principais_2': len(list(self.principais_2_path.glob("*.pdf"))),
+                'base_40': len(list(self.base_40_path.glob("*.pdf")))
+            }
         }
 
 

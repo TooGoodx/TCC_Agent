@@ -1,9 +1,19 @@
 """
 Templates de prompts para o assistente acadêmico.
+Inclui hierarquia de documentos e templates de validação.
 """
 
 # System prompt base para o Claude
 SYSTEM_PROMPT = """Você é um assistente acadêmico especializado em redação de TCC (Trabalho de Conclusão de Curso) na área de futebol.
+
+HIERARQUIA DE DOCUMENTOS (MUITO IMPORTANTE):
+1. METODOLOGIA (PRIORIDADE MÁXIMA): Use SEMPRE o modelo/método do artigo metodológico como base estrutural. Todo texto deve ser fundamentado nesta metodologia.
+2. PRINCIPAIS (ALTA PRIORIDADE): NUNCA contradiga estes artigos fundamentais. São a referência teórica principal.
+3. BASE (CONTEXTO): Use para citações adicionais e enriquecimento do texto.
+
+Se houver conflito entre fontes, SEMPRE siga a hierarquia acima:
+- Metodologia > Principais > Base
+- Em caso de dúvida, priorize as fontes de maior hierarquia.
 
 Sua função é auxiliar na escrita de textos acadêmicos de alta qualidade, seguindo rigorosamente:
 
@@ -249,6 +259,62 @@ AUTOR, A. A. Título da obra. Local: Editora, Ano.
 Organize em ordem alfabética."""
 
 
+# Template para verificação de metodologia
+METHODOLOGY_CHECK_TEMPLATE = """Verifique se o texto gerado:
+
+1. Utiliza a metodologia de {methodology_title}:
+   - Menciona o modelo/instrumento metodológico?
+   - Segue a estrutura proposta?
+   - Utiliza as categorias de análise corretas?
+
+2. Não contradiz os artigos principais:
+   - As afirmações estão alinhadas com a literatura principal?
+   - Há argumentos que vão contra os achados principais?
+
+3. Lista possíveis conflitos encontrados:
+   - Divergências conceituais
+   - Definições diferentes
+   - Resultados contraditórios
+
+TEXTO A VERIFICAR:
+{text}
+
+CONTEXTO DA METODOLOGIA:
+{methodology_context}
+
+CONTEXTO DOS PRINCIPAIS:
+{principais_context}
+
+Forneça um relatório estruturado com:
+- Status: APROVADO / REQUER_REVISÃO / CONTRADIÇÃO_DETECTADA
+- Uso da metodologia: SIM / PARCIAL / NÃO
+- Contradições: Lista ou "Nenhuma encontrada"
+- Sugestões de ajuste (se necessário)
+"""
+
+# Template para regeneração com ajustes
+REGENERATE_WITH_FIXES_TEMPLATE = """O texto anterior teve os seguintes problemas identificados:
+
+PROBLEMAS:
+{problems}
+
+RECOMENDAÇÕES:
+{recommendations}
+
+Por favor, regenere o texto corrigindo esses problemas:
+- Se a metodologia não foi mencionada, incorpore-a explicitamente
+- Se houve contradições, alinhe com os artigos principais
+- Mantenha todas as outras características de qualidade
+
+SOLICITAÇÃO ORIGINAL:
+{original_request}
+
+CONTEXTO (priorizado por hierarquia):
+{context}
+
+Gere um texto revisado que atenda às recomendações."""
+
+
 # Exemplos de uso para o usuário
 USAGE_EXAMPLES = """
 ## 📚 Exemplos de Prompts:
@@ -270,4 +336,67 @@ USAGE_EXAMPLES = """
 
 **Geral:**
 "Desenvolva um parágrafo sobre [tema específico], incluindo citações de pelo menos 3 autores diferentes."
+
+---
+
+## 🎯 Hierarquia de Documentos:
+
+O sistema agora suporta 3 níveis de prioridade:
+1. **Metodologia** (máxima): Artigo base para estrutura metodológica
+2. **Principais** (alta): Referências teóricas fundamentais
+3. **Base** (contexto): Artigos para citações adicionais
+
+O texto gerado sempre respeitará esta hierarquia!
 """
+
+
+def get_methodology_check_prompt(
+    text: str,
+    methodology_title: str,
+    methodology_context: str,
+    principais_context: str
+) -> str:
+    """
+    Gera prompt para verificação de metodologia.
+
+    Args:
+        text: Texto a verificar
+        methodology_title: Título da metodologia
+        methodology_context: Contexto do artigo metodológico
+        principais_context: Contexto dos artigos principais
+
+    Returns:
+        Prompt formatado
+    """
+    return METHODOLOGY_CHECK_TEMPLATE.format(
+        methodology_title=methodology_title,
+        text=text,
+        methodology_context=methodology_context,
+        principais_context=principais_context
+    )
+
+
+def get_regenerate_prompt(
+    original_request: str,
+    context: str,
+    problems: str,
+    recommendations: str
+) -> str:
+    """
+    Gera prompt para regeneração com correções.
+
+    Args:
+        original_request: Solicitação original do usuário
+        context: Contexto dos artigos
+        problems: Problemas identificados
+        recommendations: Recomendações de ajuste
+
+    Returns:
+        Prompt formatado
+    """
+    return REGENERATE_WITH_FIXES_TEMPLATE.format(
+        original_request=original_request,
+        context=context,
+        problems=problems,
+        recommendations=recommendations
+    )

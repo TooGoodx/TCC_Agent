@@ -1,6 +1,6 @@
 """
 TCC Agent - Assistente de Escrita Acadêmica com IA
-Interface Streamlit
+Interface Streamlit com suporte a hierarquia de documentos
 """
 import streamlit as st
 import os
@@ -12,6 +12,7 @@ from src.pdf_processor import PDFProcessor
 from src.vector_store import VectorStore
 from src.claude_agent import ClaudeAgent
 from src.citation_manager import CitationManager
+from src.text_validator import TextValidator
 from src.prompts import USAGE_EXAMPLES
 
 # Configuração da página
@@ -68,21 +69,24 @@ def init_components():
         vector_store = VectorStore()
         agent = ClaudeAgent()
         citation_manager = CitationManager()
+        text_validator = TextValidator()
 
         # Try Streamlit secrets first (for cloud), then .env (for local)
         try:
             folder_40 = st.secrets.get("GOOGLE_DRIVE_FOLDER_40") or os.getenv("GOOGLE_DRIVE_FOLDER_40")
             folder_2 = st.secrets.get("GOOGLE_DRIVE_FOLDER_2") or os.getenv("GOOGLE_DRIVE_FOLDER_2")
+            folder_metodologia = st.secrets.get("GOOGLE_DRIVE_FOLDER_METODOLOGIA") or os.getenv("GOOGLE_DRIVE_FOLDER_METODOLOGIA")
         except (AttributeError, FileNotFoundError):
             folder_40 = os.getenv("GOOGLE_DRIVE_FOLDER_40")
             folder_2 = os.getenv("GOOGLE_DRIVE_FOLDER_2")
+            folder_metodologia = os.getenv("GOOGLE_DRIVE_FOLDER_METODOLOGIA")
 
-        pdf_processor = PDFProcessor(folder_40, folder_2)
+        pdf_processor = PDFProcessor(folder_40, folder_2, folder_metodologia)
 
-        return vector_store, agent, citation_manager, pdf_processor
+        return vector_store, agent, citation_manager, pdf_processor, text_validator
     except Exception as e:
         st.error(f"Erro ao inicializar componentes: {e}")
-        return None, None, None, None
+        return None, None, None, None, None
 
 
 def save_to_history(text: str, user_request: str):
@@ -141,6 +145,180 @@ def export_to_docx(text: str, filename: str = "output.docx"):
         return None
 
 
+def render_article_management_tab(pdf_processor, vector_store):
+    """Renderiza a aba de gestão de artigos."""
+    st.subheader("📚 Gestão de Artigos")
+
+    # Contadores por categoria
+    pdf_status = pdf_processor.check_pdfs_exist()
+    counts = pdf_status.get('counts', {})
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("🎯 Metodologia", counts.get('metodologia', 0))
+    with col2:
+        st.metric("⭐ Principais", counts.get('principais_2', 0))
+    with col3:
+        st.metric("📚 Base", counts.get('base_40', 0))
+
+    st.markdown("---")
+
+    # Upload de PDF para metodologia
+    st.subheader("📤 Upload de Artigo Metodológico")
+    st.info("Faça upload do artigo que servirá como base metodológica (ex: Garcia Lopez GPET)")
+
+    uploaded_file = st.file_uploader(
+        "Selecione o PDF",
+        type=['pdf'],
+        key="methodology_uploader",
+        help="Este artigo terá prioridade máxima na geração de textos"
+    )
+
+    if uploaded_file is not None:
+        st.write(f"📄 Arquivo: **{uploaded_file.name}**")
+
+        if st.button("✅ Adicionar como Metodologia", type="primary"):
+            with st.spinner("Processando PDF..."):
+                try:
+                    # Salva e processa o PDF
+                    pdf_data = pdf_processor.upload_single_pdf(
+                        uploaded_file,
+                        uploaded_file.name,
+                        category='metodologia'
+                    )
+
+                    if pdf_data:
+                        # Adiciona ao vector store
+                        vector_store.add_single_document(pdf_data)
+                        st.success(f"✅ '{uploaded_file.name}' adicionado como metodologia!")
+                        st.rerun()
+                    else:
+                        st.error("Erro ao processar o PDF")
+                except Exception as e:
+                    st.error(f"Erro: {e}")
+
+    st.markdown("---")
+
+    # Lista de artigos por categoria
+    st.subheader("📋 Artigos Indexados")
+
+    pdfs_by_category = pdf_processor.get_pdfs_by_category()
+
+    # Metodologia
+    with st.expander("🎯 METODOLOGIA (Prioridade Máxima)", expanded=True):
+        if pdfs_by_category['metodologia']:
+            for pdf in pdfs_by_category['metodologia']:
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.write(f"📄 {pdf}")
+                with col2:
+                    if st.button("🗑️", key=f"del_met_{pdf}"):
+                        pdf_processor.remove_pdf(pdf, 'metodologia')
+                        vector_store.remove_document(pdf)
+                        st.rerun()
+        else:
+            st.write("_Nenhum artigo de metodologia_")
+
+    # Principais
+    with st.expander("⭐ PRINCIPAIS (Alta Prioridade)"):
+        if pdfs_by_category['principais_2']:
+            for pdf in pdfs_by_category['principais_2']:
+                st.write(f"📄 {pdf}")
+        else:
+            st.write("_Nenhum artigo principal_")
+
+    # Base
+    with st.expander("📚 BASE (Contexto)"):
+        if pdfs_by_category['base_40']:
+            for pdf in pdfs_by_category['base_40']:
+                st.write(f"📄 {pdf}")
+        else:
+            st.write("_Nenhum artigo base_")
+
+    st.markdown("---")
+
+    # Botão de reindexação
+    if st.button("🔄 Reindexar Toda a Base", use_container_width=True):
+        with st.spinner("Processando e indexando todos os PDFs..."):
+            try:
+                pdfs_data = pdf_processor.process_all_pdfs()
+                vector_store.add_documents(pdfs_data, force_reindex=True)
+                st.success(f"✅ {len(pdfs_data)} PDFs reindexados!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro: {e}")
+
+
+def render_validation_results(validation_report):
+    """Renderiza os resultados da validação."""
+    if not validation_report:
+        return
+
+    st.markdown("---")
+    st.subheader("🔍 Validação do Texto")
+
+    # Status geral
+    if validation_report['valid']:
+        st.success(f"✅ {validation_report['summary']}")
+    else:
+        st.warning(f"⚠️ {validation_report['summary']}")
+
+    # Fontes utilizadas
+    sources_used = validation_report.get('sources_used', {})
+    if sources_used and any(sources_used.values()):
+        with st.expander("📚 Fontes Utilizadas na Geração", expanded=True):
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.markdown("**🎯 Metodologia**")
+                metodologia_sources = sources_used.get('metodologia', [])
+                if metodologia_sources:
+                    for src in metodologia_sources:
+                        st.write(f"• {src}")
+                else:
+                    st.caption("_Nenhuma fonte de metodologia utilizada_")
+
+            with col2:
+                st.markdown("**⭐ Principais**")
+                principais_sources = sources_used.get('principais_2', [])
+                if principais_sources:
+                    for src in principais_sources:
+                        st.write(f"• {src}")
+                else:
+                    st.caption("_Nenhuma fonte principal utilizada_")
+
+            with col3:
+                st.markdown("**📚 Base**")
+                base_sources = sources_used.get('base_40', [])
+                if base_sources:
+                    for src in base_sources:
+                        st.write(f"• {src}")
+                else:
+                    st.caption("_Nenhuma fonte base utilizada_")
+
+    # Alertas
+    alerts = validation_report.get('alerts', [])
+    if alerts:
+        with st.expander("📋 Detalhes da Validação", expanded=not validation_report['valid']):
+            for alert in alerts:
+                if alert.level == 'error':
+                    st.error(f"❌ [{alert.category}] {alert.message}")
+                elif alert.level == 'warning':
+                    st.warning(f"⚠️ [{alert.category}] {alert.message}")
+                else:
+                    st.info(f"ℹ️ [{alert.category}] {alert.message}")
+
+                if alert.suggestion:
+                    st.caption(f"💡 {alert.suggestion}")
+
+    # Recomendações
+    recommendations = validation_report.get('recommendations', [])
+    if recommendations:
+        with st.expander("💡 Recomendações"):
+            for rec in recommendations:
+                st.write(f"• {rec}")
+
+
 def main():
     """Função principal da aplicação."""
 
@@ -149,7 +327,12 @@ def main():
     st.markdown("---")
 
     # Inicializa componentes
-    vector_store, agent, citation_manager, pdf_processor = init_components()
+    components = init_components()
+    if len(components) == 5:
+        vector_store, agent, citation_manager, pdf_processor, text_validator = components
+    else:
+        st.error("❌ Erro ao inicializar aplicação. Verifique as configurações.")
+        return
 
     if not all([vector_store, agent, citation_manager, pdf_processor]):
         st.error("❌ Erro ao inicializar aplicação. Verifique as configurações.")
@@ -165,8 +348,20 @@ def main():
 
         if stats['ready']:
             st.success(f"✅ {stats['total_chunks']} chunks indexados")
+
+            # Mostra por categoria com indicadores visuais
+            cat_display = {
+                'metodologia': '🎯 Metodologia',
+                'principais_2': '⭐ Principais',
+                'base_40': '📚 Base'
+            }
             for cat, count in stats['by_category'].items():
-                st.write(f"  • {cat}: {count}")
+                display_name = cat_display.get(cat, cat)
+                st.write(f"  {display_name}: {count}")
+
+            # Alerta se não há metodologia
+            if not stats.get('has_metodologia', False):
+                st.warning("⚠️ Nenhum artigo de metodologia indexado!")
         else:
             st.warning("⚠️ Base vetorial vazia")
 
@@ -200,19 +395,43 @@ def main():
             }[x]
         )
 
-        category_filter = st.radio(
-            "Base de conhecimento:",
-            [None, "principais_2", "base_40"],
-            format_func=lambda x: {
-                None: "📚 Todos (42 artigos)",
-                "principais_2": "⭐ Principais (2)",
-                "base_40": "📖 Base (40)"
-            }[x]
+        # Nova opção: usar hierarquia
+        use_hierarchy = st.checkbox(
+            "Usar hierarquia de documentos",
+            value=True,
+            help="Prioriza: Metodologia > Principais > Base"
         )
 
-        n_context_chunks = st.slider("Chunks de contexto:", 3, 15, 5)
+        if use_hierarchy:
+            st.caption("📊 Hierarquia ativa")
+            with st.expander("⚙️ Ajustar hierarquia"):
+                n_metodologia = st.slider("Chunks de metodologia:", 0, 5, 2)
+                n_principais = st.slider("Chunks principais:", 0, 5, 3)
+                n_base = st.slider("Chunks da base:", 0, 10, 5)
+            category_filter = None
+        else:
+            n_metodologia, n_principais, n_base = 2, 3, 5
+            category_filter = st.radio(
+                "Base de conhecimento:",
+                [None, "metodologia", "principais_2", "base_40"],
+                format_func=lambda x: {
+                    None: "📚 Todos",
+                    "metodologia": "🎯 Metodologia",
+                    "principais_2": "⭐ Principais",
+                    "base_40": "📖 Base"
+                }[x]
+            )
+
+        n_context_chunks = st.slider("Chunks de contexto:", 3, 15, 10)
 
         include_citations = st.checkbox("Incluir citações", value=True)
+
+        # Validação automática
+        auto_validate = st.checkbox(
+            "Validar automaticamente",
+            value=True,
+            help="Verifica uso de metodologia e contradições"
+        )
 
         st.markdown("---")
 
@@ -263,131 +482,183 @@ def main():
                     st.session_state.confirm_clear = False
                     st.rerun()
 
-    # Área principal
-    col1, col2 = st.columns([1, 1])
+    # Área principal com abas
+    tab1, tab2 = st.tabs(["✍️ Geração de Texto", "📚 Gestão de Artigos"])
 
-    with col1:
-        st.subheader("✍️ Sua Solicitação")
+    with tab2:
+        render_article_management_tab(pdf_processor, vector_store)
 
-        user_request = st.text_area(
-            "O que você quer escrever?",
-            height=200,
-            placeholder="Ex: Escreva uma introdução sobre a importância da análise tática no futebol moderno...",
-            help="Seja específico para melhores resultados"
-        )
+    with tab1:
+        col1, col2 = st.columns([1, 1])
 
-        col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
+        with col1:
+            st.subheader("✍️ Sua Solicitação")
 
-        with col_btn1:
-            generate_btn = st.button("🚀 Gerar Texto", type="primary", use_container_width=True)
-
-        with col_btn2:
-            examples_btn = st.button("💡 Ver Exemplos", use_container_width=True)
-
-        with col_btn3:
-            summary_btn = st.button("📚 Resumir Artigos", use_container_width=True)
-
-        # Botão de exemplos
-        if examples_btn:
-            with st.expander("💡 Exemplos de Prompts", expanded=True):
-                st.markdown(USAGE_EXAMPLES)
-
-        # Botão de resumo
-        if summary_btn:
-            with st.spinner("Gerando resumo dos artigos..."):
-                try:
-                    summary = agent.summarize_articles(category=category_filter, max_articles=5)
-                    st.info("📚 **Resumo dos Artigos:**\n\n" + summary)
-                except Exception as e:
-                    st.error(f"Erro ao gerar resumo: {e}")
-
-    with col2:
-        st.subheader("📝 Texto Gerado")
-
-        # Container para o resultado
-        result_container = st.container()
-
-        # Sessão para armazenar resultado
-        if 'generated_text' not in st.session_state:
-            st.session_state.generated_text = ""
-
-        if 'current_request' not in st.session_state:
-            st.session_state.current_request = ""
-
-    # Geração de texto
-    if generate_btn and user_request:
-        with st.spinner("🤖 Gerando texto acadêmico..."):
-            try:
-                generated_text = agent.generate_text(
-                    user_request=user_request,
-                    section_type=section_type,
-                    word_count=word_count,
-                    tone=tone,
-                    include_citations=include_citations,
-                    category_filter=category_filter,
-                    n_context_chunks=n_context_chunks,
-                    stream=False
-                )
-
-                st.session_state.generated_text = generated_text
-                st.session_state.current_request = user_request
-
-            except Exception as e:
-                st.error(f"❌ Erro ao gerar texto: {e}")
-
-    # Exibe resultado
-    with result_container:
-        if st.session_state.generated_text:
-            st.text_area(
-                "Resultado:",
-                value=st.session_state.generated_text,
-                height=400,
-                label_visibility="collapsed"
+            user_request = st.text_area(
+                "O que você quer escrever?",
+                height=200,
+                placeholder="Ex: Escreva uma introdução sobre a importância da análise tática no futebol moderno...",
+                help="Seja específico para melhores resultados"
             )
 
-            # Ações pós-geração
-            st.markdown("---")
-            col_action1, col_action2, col_action3, col_action4 = st.columns(4)
+            col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
 
-            with col_action1:
-                if st.button("💾 Salvar Histórico"):
-                    filepath = save_to_history(
-                        st.session_state.generated_text,
-                        st.session_state.current_request
+            with col_btn1:
+                generate_btn = st.button("🚀 Gerar Texto", type="primary", use_container_width=True)
+
+            with col_btn2:
+                examples_btn = st.button("💡 Ver Exemplos", use_container_width=True)
+
+            with col_btn3:
+                summary_btn = st.button("📚 Resumir Artigos", use_container_width=True)
+
+            # Botão de exemplos
+            if examples_btn:
+                with st.expander("💡 Exemplos de Prompts", expanded=True):
+                    st.markdown(USAGE_EXAMPLES)
+
+            # Botão de resumo
+            if summary_btn:
+                with st.spinner("Gerando resumo dos artigos..."):
+                    try:
+                        summary = agent.summarize_articles(category=category_filter, max_articles=5)
+                        st.info("📚 **Resumo dos Artigos:**\n\n" + summary)
+                    except Exception as e:
+                        st.error(f"Erro ao gerar resumo: {e}")
+
+        with col2:
+            st.subheader("📝 Texto Gerado")
+
+            # Container para o resultado
+            result_container = st.container()
+
+            # Sessão para armazenar resultado
+            if 'generated_text' not in st.session_state:
+                st.session_state.generated_text = ""
+
+            if 'current_request' not in st.session_state:
+                st.session_state.current_request = ""
+
+            if 'validation_report' not in st.session_state:
+                st.session_state.validation_report = None
+
+            if 'context_used' not in st.session_state:
+                st.session_state.context_used = ""
+
+        # Geração de texto
+        if generate_btn and user_request:
+            with st.spinner("🤖 Gerando texto acadêmico..."):
+                try:
+                    # Gera texto com captura do contexto
+                    generated_text, context_used = agent.generate_text_with_sources(
+                        user_request=user_request,
+                        section_type=section_type,
+                        word_count=word_count,
+                        tone=tone,
+                        include_citations=include_citations,
+                        use_hierarchy=use_hierarchy,
+                        n_metodologia=n_metodologia,
+                        n_principais=n_principais,
+                        n_base=n_base,
+                        category_filter=category_filter,
+                        n_context_chunks=n_context_chunks
                     )
-                    st.success(f"✅ Salvo em: {filepath.name}")
 
-            with col_action2:
-                if st.button("📥 Export DOCX"):
-                    docx_path = export_to_docx(st.session_state.generated_text)
-                    if docx_path:
-                        st.success(f"✅ Exportado: {docx_path.name}")
+                    st.session_state.generated_text = generated_text
+                    st.session_state.current_request = user_request
+                    st.session_state.context_used = context_used
 
-            with col_action3:
-                if st.button("🔍 Analisar Citações"):
-                    with st.expander("📖 Análise de Citações", expanded=True):
-                        citations = citation_manager.extract_citations(st.session_state.generated_text)
-                        st.write(f"**Total de citações:** {len(citations)}")
+                    # Validação automática
+                    if auto_validate:
+                        with st.spinner("🔍 Validando texto..."):
+                            validation_report = agent.validate_generated_text(
+                                generated_text,
+                                context_used=context_used
+                            )
+                            st.session_state.validation_report = validation_report
+                    else:
+                        st.session_state.validation_report = None
 
-                        if citations:
-                            st.write("**Autores citados:**")
-                            for c in citations:
-                                st.write(f"  • {c['author']} ({c['year']})")
+                except Exception as e:
+                    st.error(f"❌ Erro ao gerar texto: {e}")
 
-                        suggestions = citation_manager.suggest_citation_improvements(
-                            st.session_state.generated_text
+        # Exibe resultado
+        with result_container:
+            if st.session_state.generated_text:
+                st.text_area(
+                    "Resultado:",
+                    value=st.session_state.generated_text,
+                    height=400,
+                    label_visibility="collapsed"
+                )
+
+                # Exibe validação se houver
+                if st.session_state.validation_report:
+                    render_validation_results(st.session_state.validation_report)
+
+                    # Botão de regenerar se houver problemas
+                    if not st.session_state.validation_report.get('valid', True):
+                        if st.button("🔄 Regenerar com Ajustes", type="secondary"):
+                            with st.spinner("🔄 Regenerando texto com correções..."):
+                                try:
+                                    new_text = agent.regenerate_with_fixes(
+                                        st.session_state.current_request,
+                                        st.session_state.validation_report,
+                                        st.session_state.generated_text
+                                    )
+                                    st.session_state.generated_text = new_text
+
+                                    # Revalida
+                                    new_validation = agent.validate_generated_text(new_text)
+                                    st.session_state.validation_report = new_validation
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Erro ao regenerar: {e}")
+
+                # Ações pós-geração
+                st.markdown("---")
+                col_action1, col_action2, col_action3, col_action4 = st.columns(4)
+
+                with col_action1:
+                    if st.button("💾 Salvar Histórico"):
+                        filepath = save_to_history(
+                            st.session_state.generated_text,
+                            st.session_state.current_request
                         )
-                        st.write("\n**Sugestões:**")
-                        for s in suggestions:
-                            st.write(s)
+                        st.success(f"✅ Salvo em: {filepath.name}")
 
-            with col_action4:
-                if st.button("🗑️ Limpar"):
-                    st.session_state.generated_text = ""
-                    st.session_state.current_request = ""
-                    st.rerun()
-        else:
-            st.info("👈 Digite sua solicitação e clique em 'Gerar Texto'")
+                with col_action2:
+                    if st.button("📥 Export DOCX"):
+                        docx_path = export_to_docx(st.session_state.generated_text)
+                        if docx_path:
+                            st.success(f"✅ Exportado: {docx_path.name}")
+
+                with col_action3:
+                    if st.button("🔍 Analisar Citações"):
+                        with st.expander("📖 Análise de Citações", expanded=True):
+                            citations = citation_manager.extract_citations(st.session_state.generated_text)
+                            st.write(f"**Total de citações:** {len(citations)}")
+
+                            if citations:
+                                st.write("**Autores citados:**")
+                                for c in citations:
+                                    st.write(f"  • {c['author']} ({c['year']})")
+
+                            suggestions = citation_manager.suggest_citation_improvements(
+                                st.session_state.generated_text
+                            )
+                            st.write("\n**Sugestões:**")
+                            for s in suggestions:
+                                st.write(s)
+
+                with col_action4:
+                    if st.button("🗑️ Limpar"):
+                        st.session_state.generated_text = ""
+                        st.session_state.current_request = ""
+                        st.session_state.validation_report = None
+                        st.rerun()
+            else:
+                st.info("👈 Digite sua solicitação e clique em 'Gerar Texto'")
 
     # Footer
     st.markdown("---")
