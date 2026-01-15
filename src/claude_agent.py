@@ -97,11 +97,11 @@ class ClaudeAgent:
         n_bas = n_base if n_base is not None else self.n_base_chunks
 
         # Busca contexto relevante na base vetorial
-        print(f"🔍 Buscando contexto relevante para: '{user_request[:50]}...'")
+        print(f"Buscando contexto relevante para: '{user_request[:50]}...'")
 
         if use_hierarchy and not category_filter:
             # Busca hierárquica: metodologia > principais > base
-            print("  📊 Usando busca hierárquica...")
+            print("  Usando busca hierarquica...")
             context = self.vector_store.get_context_for_prompt(
                 query=user_request,
                 use_hierarchy=True,
@@ -359,7 +359,7 @@ class ClaudeAgent:
 
     def _generate_complete(self, user_prompt: str) -> str:
         """Gera texto completo (não-streaming)."""
-        print("🤖 Gerando texto com Claude...")
+        print("Gerando texto com Claude...")
 
         response = self.client.messages.create(
             model=self.model,
@@ -372,13 +372,13 @@ class ClaudeAgent:
         )
 
         generated_text = response.content[0].text
-        print("✅ Texto gerado com sucesso!")
+        print("Texto gerado com sucesso!")
 
         return generated_text
 
     def _generate_stream(self, user_prompt: str) -> Generator:
         """Gera texto em streaming."""
-        print("🤖 Iniciando geração em streaming...")
+        print("Iniciando geracao em streaming...")
 
         with self.client.messages.stream(
             model=self.model,
@@ -559,18 +559,18 @@ Formato: lista organizada por tópicos."""
             if results:
                 found_topics.append(topic)
 
-        suggestions = f"""📚 **Sugestões baseadas nos artigos indexados:**
+        suggestions = f"""**Sugestoes baseadas nos artigos indexados:**
 
-Os artigos em sua base de conhecimento cobrem os seguintes tópicos:
+Os artigos em sua base de conhecimento cobrem os seguintes topicos:
 {', '.join(found_topics)}
 
-Você pode pedir coisas como:
-- "Escreva uma introdução sobre {found_topics[0] if found_topics else 'análise tática'}"
-- "Desenvolva um parágrafo sobre a relação entre {found_topics[0] if found_topics else 'tática'} e {found_topics[1] if len(found_topics) > 1 else 'desempenho'}"
-- "Explique as metodologias de {found_topics[0] if found_topics else 'análise'} citando estudos"
-- "Faça uma revisão de literatura sobre {found_topics[2] if len(found_topics) > 2 else 'futebol moderno'}"
+Voce pode pedir coisas como:
+- "Escreva uma introducao sobre {found_topics[0] if found_topics else 'analise tatica'}"
+- "Desenvolva um paragrafo sobre a relacao entre {found_topics[0] if found_topics else 'tatica'} e {found_topics[1] if len(found_topics) > 1 else 'desempenho'}"
+- "Explique as metodologias de {found_topics[0] if found_topics else 'analise'} citando estudos"
+- "Faca uma revisao de literatura sobre {found_topics[2] if len(found_topics) > 2 else 'futebol moderno'}"
 
-💡 **Dica**: Seja específico em sua solicitação para resultados mais precisos!
+**Dica**: Seja especifico em sua solicitacao para resultados mais precisos!
 """
         return suggestions
 
@@ -580,18 +580,18 @@ if __name__ == "__main__":
     agent = ClaudeAgent()
 
     # Teste básico
-    print("\n🧪 Teste do Claude Agent\n")
+    print("\nTeste do Claude Agent\n")
 
     # Verifica se vector store está pronto
     stats = agent.vector_store.get_stats()
     if not stats['ready']:
-        print("⚠️ Base vetorial não está pronta. Execute o processamento dos PDFs primeiro.")
+        print("Base vetorial nao esta pronta. Execute o processamento dos PDFs primeiro.")
     else:
-        print(f"✅ Base vetorial pronta com {stats['total_chunks']} chunks")
+        print(f"Base vetorial pronta com {stats['total_chunks']} chunks")
 
         # Teste de geração
-        test_request = "Escreva um parágrafo sobre a importância da análise tática no futebol"
-        print(f"\n📝 Testando geração: {test_request}")
+        test_request = "Escreva um paragrafo sobre a importancia da analise tatica no futebol"
+        print(f"\nTestando geracao: {test_request}")
 
         result = agent.generate_text(
             user_request=test_request,
@@ -600,4 +600,4 @@ if __name__ == "__main__":
             n_context_chunks=3
         )
 
-        print(f"\n📄 Resultado:\n{result}")
+        print(f"\nResultado:\n{result}")

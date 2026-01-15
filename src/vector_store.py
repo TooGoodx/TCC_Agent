@@ -76,9 +76,9 @@ class VectorStore:
         self.client = chromadb.PersistentClient(path=persist_directory)
 
         # Carrega modelo de embeddings (multilingual para português)
-        print("🔄 Carregando modelo de embeddings...")
+        print("Carregando modelo de embeddings...")
         self.embedding_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-        print("✅ Modelo de embeddings carregado!")
+        print("Modelo de embeddings carregado!")
 
         # Text splitter para dividir documentos grandes
         self.text_splitter = SimpleTextSplitter(
@@ -92,14 +92,14 @@ class VectorStore:
         try:
             # Tenta obter coleção existente
             collection = self.client.get_collection(name=self.collection_name)
-            print(f"📚 Coleção '{self.collection_name}' carregada ({collection.count()} documentos)")
+            print(f"Colecao '{self.collection_name}' carregada ({collection.count()} documentos)")
         except:
             # Cria nova coleção
             collection = self.client.create_collection(
                 name=self.collection_name,
                 metadata={"description": "Artigos acadêmicos para TCC sobre futebol"}
             )
-            print(f"✨ Nova coleção '{self.collection_name}' criada")
+            print(f"Nova colecao '{self.collection_name}' criada")
 
         return collection
 
@@ -132,16 +132,16 @@ class VectorStore:
 
         # Se force_reindex, limpa a coleção
         if force_reindex and collection.count() > 0:
-            print("🗑️ Limpando coleção existente...")
+            print("Limpando colecao existente...")
             self.client.delete_collection(name=self.collection_name)
             collection = self._get_or_create_collection()
 
         # Se a coleção já tem documentos e não forçou reindex, pula
         if collection.count() > 0 and not force_reindex:
-            print(f"✅ Base vetorial já contém {collection.count()} documentos")
+            print(f"Base vetorial ja contem {collection.count()} documentos")
             return
 
-        print(f"\n📝 Processando {len(pdfs_data)} PDFs para indexação...")
+        print(f"\nProcessando {len(pdfs_data)} PDFs para indexacao...")
 
         all_chunks = []
         all_metadatas = []
@@ -149,7 +149,7 @@ class VectorStore:
         chunk_counter = 0
 
         for pdf in pdfs_data:
-            print(f"  📄 Dividindo '{pdf['filename']}' em chunks...")
+            print(f"  Dividindo '{pdf['filename']}' em chunks...")
 
             # Divide o texto em chunks
             chunks = self.text_splitter.split_text(pdf['full_text'])
@@ -173,13 +173,13 @@ class VectorStore:
                 all_ids.append(chunk_id)
                 chunk_counter += 1
 
-        print(f"\n🔢 Total de chunks criados: {chunk_counter}")
-        print("🧮 Criando embeddings...")
+        print(f"\nTotal de chunks criados: {chunk_counter}")
+        print("Criando embeddings...")
 
         # Cria embeddings
         embeddings = self._create_embeddings(all_chunks)
 
-        print("💾 Salvando no ChromaDB...")
+        print("Salvando no ChromaDB...")
 
         # Adiciona à coleção em batches (ChromaDB tem limite)
         batch_size = 100
@@ -193,9 +193,9 @@ class VectorStore:
                 ids=all_ids[i:end_idx]
             )
 
-            print(f"  ✅ Batch {i//batch_size + 1}/{(len(all_chunks)-1)//batch_size + 1} adicionado")
+            print(f"  Batch {i//batch_size + 1}/{(len(all_chunks)-1)//batch_size + 1} adicionado")
 
-        print(f"\n✅ Base vetorial criada com sucesso! Total: {collection.count()} chunks")
+        print(f"\nBase vetorial criada com sucesso! Total: {collection.count()} chunks")
 
     def search(
         self,
@@ -220,7 +220,7 @@ class VectorStore:
 
         # Verifica se a coleção está vazia
         if collection.count() == 0:
-            print("⚠️ Base vetorial vazia. Execute a indexação primeiro.")
+            print("Base vetorial vazia. Execute a indexacao primeiro.")
             return []
 
         # Cria embedding da query
@@ -358,11 +358,11 @@ class VectorStore:
                 ids=all_ids
             )
 
-            print(f"✅ Documento '{pdf_data['filename']}' adicionado com {len(chunks)} chunks")
+            print(f"Documento '{pdf_data['filename']}' adicionado com {len(chunks)} chunks")
             return True
 
         except Exception as e:
-            print(f"❌ Erro ao adicionar documento: {e}")
+            print(f"Erro ao adicionar documento: {e}")
             return False
 
     def remove_document(self, filename: str) -> bool:
@@ -385,14 +385,14 @@ class VectorStore:
 
             if results['ids']:
                 collection.delete(ids=results['ids'])
-                print(f"✅ Removidos {len(results['ids'])} chunks de '{filename}'")
+                print(f"Removidos {len(results['ids'])} chunks de '{filename}'")
                 return True
             else:
-                print(f"⚠️ Documento '{filename}' não encontrado na base")
+                print(f"Documento '{filename}' nao encontrado na base")
                 return False
 
         except Exception as e:
-            print(f"❌ Erro ao remover documento: {e}")
+            print(f"Erro ao remover documento: {e}")
             return False
 
     def remove_category(self, category: str) -> bool:
@@ -415,14 +415,14 @@ class VectorStore:
 
             if results['ids']:
                 collection.delete(ids=results['ids'])
-                print(f"✅ Removidos {len(results['ids'])} chunks da categoria '{category}'")
+                print(f"Removidos {len(results['ids'])} chunks da categoria '{category}'")
                 return True
             else:
-                print(f"⚠️ Nenhum documento encontrado na categoria '{category}'")
+                print(f"Nenhum documento encontrado na categoria '{category}'")
                 return False
 
         except Exception as e:
-            print(f"❌ Erro ao remover categoria: {e}")
+            print(f"Erro ao remover categoria: {e}")
             return False
 
     def get_documents_in_category(self, category: str) -> List[str]:
@@ -450,7 +450,7 @@ class VectorStore:
             return list(filenames)
 
         except Exception as e:
-            print(f"❌ Erro ao listar documentos: {e}")
+            print(f"Erro ao listar documentos: {e}")
             return []
 
     def get_context_for_prompt(
@@ -531,14 +531,7 @@ class VectorStore:
         document = result['document']
         category = metadata.get('category', 'Desconhecido')
 
-        # Indicador de prioridade
-        priority_icon = {
-            'metodologia': '🎯',
-            'principais_2': '⭐',
-            'base_40': '📚'
-        }.get(category, '📄')
-
-        context_parts.append(f"\n--- TRECHO {index} {priority_icon} ---")
+        context_parts.append(f"\n--- TRECHO {index} [{category.upper()}] ---")
         context_parts.append(f"Fonte: {metadata.get('filename', 'Desconhecido')}")
         context_parts.append(f"Autor: {metadata.get('author', 'Desconhecido')}")
         context_parts.append(f"Categoria: {category}")
@@ -594,10 +587,10 @@ class VectorStore:
         """Reseta a base vetorial (apaga tudo)."""
         try:
             self.client.delete_collection(name=self.collection_name)
-            print("🗑️ Base vetorial resetada com sucesso")
+            print("Base vetorial resetada com sucesso")
             return True
         except Exception as e:
-            print(f"❌ Erro ao resetar base vetorial: {e}")
+            print(f"Erro ao resetar base vetorial: {e}")
             return False
 
 
@@ -607,15 +600,15 @@ if __name__ == "__main__":
 
     # Obtém estatísticas
     stats = vector_store.get_stats()
-    print(f"\n📊 Estatísticas da base vetorial:")
+    print(f"\nEstatisticas da base vetorial:")
     print(f"  Total de chunks: {stats['total_chunks']}")
     print(f"  Por categoria: {stats['by_category']}")
     print(f"  Pronto para uso: {stats['ready']}")
 
     # Teste de busca
     if stats['ready']:
-        print("\n🔍 Teste de busca:")
-        results = vector_store.search("análise tática futebol", n_results=3)
+        print("\nTeste de busca:")
+        results = vector_store.search("analise tatica futebol", n_results=3)
         print(f"Encontrados {len(results)} resultados")
         for r in results:
             print(f"  - {r['metadata']['filename']}: {r['document'][:100]}...")

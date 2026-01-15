@@ -76,11 +76,11 @@ class PDFProcessor:
                 use_cookies=False
             )
 
-            print(f"✅ Download concluído para {output_path}")
+            print(f"Download concluido para {output_path}")
             return True
 
         except Exception as e:
-            print(f"❌ Erro ao fazer download de {folder_id}: {e}")
+            print(f"Erro ao fazer download de {folder_id}: {e}")
             return False
 
     def download_all_pdfs(self) -> bool:
@@ -90,30 +90,30 @@ class PDFProcessor:
         Returns:
             bool: True se todos os downloads foram bem-sucedidos
         """
-        print("\n📥 Iniciando download dos PDFs do Google Drive...")
+        print("\nIniciando download dos PDFs do Google Drive...")
 
         # Download dos 40 artigos base
-        print("\n1️⃣ Baixando 40 artigos base...")
+        print("\n1. Baixando 40 artigos base...")
         success_40 = self.download_from_drive(self.base_folder_40, self.base_40_path)
 
         # Download dos 2 artigos principais
-        print("\n2️⃣ Baixando 2 artigos principais...")
+        print("\n2. Baixando 2 artigos principais...")
         success_2 = self.download_from_drive(self.base_folder_2, self.principais_2_path)
 
         # Download dos artigos de metodologia (se configurado)
         success_metodologia = True
         if self.base_folder_metodologia:
-            print("\n3️⃣ Baixando artigos de metodologia...")
+            print("\n3. Baixando artigos de metodologia...")
             success_metodologia = self.download_from_drive(
                 self.base_folder_metodologia,
                 self.metodologia_path
             )
 
         if success_40 and success_2 and success_metodologia:
-            print("\n✅ Todos os PDFs foram baixados com sucesso!")
+            print("\nTodos os PDFs foram baixados com sucesso!")
             return True
         else:
-            print("\n⚠️ Alguns downloads falharam. Verifique a conexão e permissões.")
+            print("\nAlguns downloads falharam. Verifique a conexao e permissoes.")
             return False
 
     def upload_single_pdf(
@@ -148,7 +148,7 @@ class PDFProcessor:
         with open(file_path, 'wb') as f:
             f.write(uploaded_file.read())
 
-        print(f"✅ PDF salvo em: {file_path}")
+        print(f"PDF salvo em: {file_path}")
 
         # Extrai texto do PDF
         pdf_data = self.extract_text_from_pdf(file_path)
@@ -179,11 +179,11 @@ class PDFProcessor:
         try:
             if file_path.exists():
                 file_path.unlink()
-                print(f"✅ PDF removido: {file_path}")
+                print(f"PDF removido: {file_path}")
                 return True
             return False
         except Exception as e:
-            print(f"❌ Erro ao remover PDF: {e}")
+            print(f"Erro ao remover PDF: {e}")
             return False
 
     def extract_text_from_pdf(self, pdf_path: Path) -> Dict[str, any]:
@@ -225,7 +225,7 @@ class PDFProcessor:
             }
 
         except Exception as e:
-            print(f"❌ Erro ao extrair texto de {pdf_path.name}: {e}")
+            print(f"Erro ao extrair texto de {pdf_path.name}: {e}")
             return None
 
     def _extract_metadata(self, pdf_path: Path) -> Dict:
@@ -279,10 +279,10 @@ class PDFProcessor:
         all_pdfs = []
 
         # Processa PDFs de METODOLOGIA (máxima prioridade)
-        print("\n🎯 Processando artigos de METODOLOGIA (prioridade máxima)...")
+        print("\nProcessando artigos de METODOLOGIA (prioridade maxima)...")
         metodologia_pdfs = list(self.metodologia_path.glob("**/*.pdf"))
         for pdf_path in metodologia_pdfs:
-            print(f"  📄 Processando: {pdf_path.name}")
+            print(f"  Processando: {pdf_path.name}")
             pdf_data = self.extract_text_from_pdf(pdf_path)
             if pdf_data:
                 pdf_data['category'] = 'metodologia'
@@ -290,10 +290,10 @@ class PDFProcessor:
                 all_pdfs.append(pdf_data)
 
         # Processa PDFs principais (alta prioridade)
-        print("\n⭐ Processando 2 artigos principais (alta prioridade)...")
+        print("\nProcessando 2 artigos principais (alta prioridade)...")
         principais_pdfs = list(self.principais_2_path.glob("**/*.pdf"))
         for pdf_path in principais_pdfs:
-            print(f"  📄 Processando: {pdf_path.name}")
+            print(f"  Processando: {pdf_path.name}")
             pdf_data = self.extract_text_from_pdf(pdf_path)
             if pdf_data:
                 pdf_data['category'] = 'principais_2'
@@ -301,20 +301,20 @@ class PDFProcessor:
                 all_pdfs.append(pdf_data)
 
         # Processa PDFs da base 40 (contexto)
-        print("\n📚 Processando 40 artigos base (contexto)...")
+        print("\nProcessando 40 artigos base (contexto)...")
         base_40_pdfs = list(self.base_40_path.glob("**/*.pdf"))
         for pdf_path in base_40_pdfs:
-            print(f"  📄 Processando: {pdf_path.name}")
+            print(f"  Processando: {pdf_path.name}")
             pdf_data = self.extract_text_from_pdf(pdf_path)
             if pdf_data:
                 pdf_data['category'] = 'base_40'
                 pdf_data['weight'] = self.CATEGORY_WEIGHTS['base_40']
                 all_pdfs.append(pdf_data)
 
-        print(f"\n✅ Total de {len(all_pdfs)} PDFs processados!")
-        print(f"   • Metodologia: {len(metodologia_pdfs)}")
-        print(f"   • Principais: {len(principais_pdfs)}")
-        print(f"   • Base: {len(base_40_pdfs)}")
+        print(f"\nTotal de {len(all_pdfs)} PDFs processados!")
+        print(f"   - Metodologia: {len(metodologia_pdfs)}")
+        print(f"   - Principais: {len(principais_pdfs)}")
+        print(f"   - Base: {len(base_40_pdfs)}")
         return all_pdfs
 
     def get_pdfs_by_category(self) -> Dict[str, List[str]]:
@@ -374,4 +374,4 @@ if __name__ == "__main__":
 
     # Processa todos os PDFs
     pdfs = processor.process_all_pdfs()
-    print(f"\n📊 Resumo: {len(pdfs)} PDFs processados")
+    print(f"\nResumo: {len(pdfs)} PDFs processados")
