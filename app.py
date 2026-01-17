@@ -1,6 +1,6 @@
 """
 TCC Agent - Assistente de Escrita Academica com IA
-Interface de Chat com memoria de longo prazo
+Interface de Chat com memoria de longo prazo e inicializacao automatica
 """
 import streamlit as st
 import os
@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from src.vector_store import VectorStore
 from src.claude_agent import ClaudeAgent
 from src.citation_manager import CitationManager
+from src.pdf_processor import PDFProcessor
 
 # Configuracao da pagina
 st.set_page_config(
@@ -47,8 +48,86 @@ st.markdown("""
         margin: 0.5rem 0;
         border-radius: 0 0.5rem 0.5rem 0;
     }
+    .init-status {
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 1rem 0;
+    }
     </style>
 """, unsafe_allow_html=True)
+
+
+def get_env_var(key: str) -> str:
+    """Obtem variavel de ambiente do Streamlit secrets ou .env."""
+    try:
+        return st.secrets.get(key) or os.getenv(key, "")
+    except (AttributeError, FileNotFoundError):
+        return os.getenv(key, "")
+
+
+@st.cache_resource(show_spinner=False)
+def initialize_vector_store():
+    """
+    Inicializa e popula a base vetorial automaticamente.
+    Verifica se ja existe dados, senao faz download e indexacao.
+    """
+    vector_store = VectorStore()
+    stats = vector_store.get_stats()
+
+    # Se ja tem documentos indexados, retorna
+    if stats['total_chunks'] > 0:
+        return vector_store, stats, None
+
+    # Base vazia - precisa indexar
+    # Obtem IDs das pastas do Google Drive
+    folder_40 = get_env_var("GOOGLE_DRIVE_FOLDER_40")
+    folder_2 = get_env_var("GOOGLE_DRIVE_FOLDER_2")
+    folder_metodologia = get_env_var("GOOGLE_DRIVE_FOLDER_METODOLOGIA")
+
+    if not folder_40 or not folder_2:
+        return vector_store, stats, "IDs das pastas do Google Drive nao configurados"
+
+    try:
+        # Inicializa processador de PDFs
+        pdf_processor = PDFProcessor(folder_40, folder_2, folder_metodologia)
+
+        # Verifica se PDFs ja existem localmente
+        pdf_status = pdf_processor.check_pdfs_exist()
+
+        if not pdf_status['all_ready']:
+            # Faz download dos PDFs
+            success = pdf_processor.download_all_pdfs()
+            if not success:
+                return vector_store, stats, "Erro ao baixar PDFs do Google Drive"
+
+        # Processa e indexa os PDFs
+        pdfs_data = pdf_processor.process_all_pdfs()
+
+        if pdfs_data:
+            vector_store.add_documents(pdfs_data, force_reindex=True)
+            stats = vector_store.get_stats()
+            return vector_store, stats, None
+        else:
+            return vector_store, stats, "Nenhum PDF encontrado para indexar"
+
+    except Exception as e:
+        return vector_store, stats, f"Erro na inicializacao: {str(e)}"
+
+
+@st.cache_resource(show_spinner=False)
+def init_agent():
+    """Inicializa o agente Claude."""
+    try:
+        return ClaudeAgent()
+    except Exception as e:
+        st.error(f"Erro ao inicializar Claude Agent: {e}")
+        return None
+
+
+@st.cache_resource(show_spinner=False)
+def init_citation_manager():
+    """Inicializa o gerenciador de citacoes."""
+    return CitationManager()
 
 
 def load_long_term_memory() -> dict:
@@ -204,32 +283,74 @@ def export_to_docx(text: str, filename: str = "output.docx"):
         return None
 
 
-@st.cache_resource
-def init_components():
-    """Inicializa componentes da aplicacao."""
-    try:
-        vector_store = VectorStore()
-        agent = ClaudeAgent()
-        citation_manager = CitationManager()
-        return vector_store, agent, citation_manager
-    except Exception as e:
-        st.error(f"Erro ao inicializar componentes: {e}")
-        return None, None, None
-
-
 def main():
     """Funcao principal da aplicacao."""
 
     # Header
     st.markdown('<div class="main-header">TCC Agent - Assistente de Escrita Academica</div>', unsafe_allow_html=True)
 
-    # Inicializa componentes
-    components = init_components()
-    if not components or not all(components):
-        st.error("Erro ao inicializar aplicacao. Verifique as configuracoes.")
-        return
+    # ===========================================
+    # INICIALIZACAO AUTOMATICA DA BASE VETORIAL
+    # ===========================================
 
-    vector_store, agent, citation_manager = components
+    # Placeholder para status de inicializacao
+    init_placeholder = st.empty()
+
+    # Verifica se ja inicializou nesta sessao
+    if 'initialized' not in st.session_state:
+        st.session_state.initialized = False
+        st.session_state.init_error = None
+
+    # Inicializa componentes
+    if not st.session_state.initialized:
+        with init_placeholder.container():
+            st.info("Inicializando base de conhecimento...")
+
+            # Progress bar
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            # Etapa 1: Inicializar Vector Store
+            status_text.text("Carregando base vetorial...")
+            progress_bar.progress(20)
+
+            vector_store, stats, init_error = initialize_vector_store()
+
+            if init_error:
+                st.session_state.init_error = init_error
+                st.warning(f"Aviso: {init_error}")
+            else:
+                progress_bar.progress(60)
+
+            # Etapa 2: Inicializar Agent
+            status_text.text("Inicializando agente Claude...")
+            progress_bar.progress(80)
+
+            agent = init_agent()
+            citation_manager = init_citation_manager()
+
+            # Etapa 3: Finalizar
+            progress_bar.progress(100)
+            status_text.text("Inicializacao concluida!")
+
+            st.session_state.initialized = True
+            st.session_state.vector_store = vector_store
+            st.session_state.agent = agent
+            st.session_state.citation_manager = citation_manager
+
+            # Limpa o placeholder apos inicializacao
+            import time
+            time.sleep(1)
+            init_placeholder.empty()
+    else:
+        vector_store = st.session_state.vector_store
+        agent = st.session_state.agent
+        citation_manager = st.session_state.citation_manager
+
+    # Verifica se componentes estao prontos
+    if not agent:
+        st.error("Erro ao inicializar o agente Claude. Verifique a API key.")
+        return
 
     # Sidebar
     with st.sidebar:
@@ -239,8 +360,19 @@ def main():
         stats = vector_store.get_stats()
         if stats['ready']:
             st.success(f"{stats['total_chunks']} chunks indexados")
+
+            # Mostra detalhes por categoria
+            with st.expander("Detalhes da base"):
+                by_cat = stats.get('by_category', {})
+                if by_cat.get('metodologia', 0) > 0:
+                    st.write(f"Metodologia: {by_cat.get('metodologia', 0)}")
+                if by_cat.get('principais_2', 0) > 0:
+                    st.write(f"Principais: {by_cat.get('principais_2', 0)}")
+                if by_cat.get('base_40', 0) > 0:
+                    st.write(f"Base: {by_cat.get('base_40', 0)}")
         else:
             st.warning("Base vetorial vazia")
+            st.caption("Configure os IDs do Google Drive nos secrets")
 
         st.markdown("---")
 
