@@ -1,19 +1,17 @@
 """
 TCC Agent - Assistente de Escrita Academica com IA
-Interface Streamlit com suporte a hierarquia de documentos
+Interface de Chat com memoria de longo prazo
 """
 import streamlit as st
 import os
+import json
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
-from src.pdf_processor import PDFProcessor
 from src.vector_store import VectorStore
 from src.claude_agent import ClaudeAgent
 from src.citation_manager import CitationManager
-from src.text_validator import TextValidator
-from src.prompts import USAGE_EXAMPLES
 
 # Configuracao da pagina
 st.set_page_config(
@@ -26,6 +24,9 @@ st.set_page_config(
 # Carrega variaveis de ambiente
 load_dotenv()
 
+# Arquivo de memoria de longo prazo
+MEMORY_FILE = Path("outputs/user_preferences.json")
+
 # CSS customizado
 st.markdown("""
     <style>
@@ -36,57 +37,118 @@ st.markdown("""
         text-align: center;
         padding: 1rem 0;
     }
-    .status-box {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        background-color: #f0f2f6;
-        margin: 1rem 0;
-    }
-    .success-box {
-        background-color: #d4edda;
-        border-left: 4px solid #28a745;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    .warning-box {
-        background-color: #fff3cd;
-        border-left: 4px solid #ffc107;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
     .stTextArea textarea {
         font-size: 1.1rem;
+    }
+    .feedback-box {
+        background-color: #e3f2fd;
+        border-left: 4px solid #1E88E5;
+        padding: 0.5rem 1rem;
+        margin: 0.5rem 0;
+        border-radius: 0 0.5rem 0.5rem 0;
     }
     </style>
 """, unsafe_allow_html=True)
 
 
-# Inicializacao de componentes (com cache)
-@st.cache_resource
-def init_components():
-    """Inicializa componentes da aplicacao."""
-    try:
-        vector_store = VectorStore()
-        agent = ClaudeAgent()
-        citation_manager = CitationManager()
-        text_validator = TextValidator()
-
-        # Try Streamlit secrets first (for cloud), then .env (for local)
+def load_long_term_memory() -> dict:
+    """Carrega memoria de longo prazo do usuario."""
+    if MEMORY_FILE.exists():
         try:
-            folder_40 = st.secrets.get("GOOGLE_DRIVE_FOLDER_40") or os.getenv("GOOGLE_DRIVE_FOLDER_40")
-            folder_2 = st.secrets.get("GOOGLE_DRIVE_FOLDER_2") or os.getenv("GOOGLE_DRIVE_FOLDER_2")
-            folder_metodologia = st.secrets.get("GOOGLE_DRIVE_FOLDER_METODOLOGIA") or os.getenv("GOOGLE_DRIVE_FOLDER_METODOLOGIA")
-        except (AttributeError, FileNotFoundError):
-            folder_40 = os.getenv("GOOGLE_DRIVE_FOLDER_40")
-            folder_2 = os.getenv("GOOGLE_DRIVE_FOLDER_2")
-            folder_metodologia = os.getenv("GOOGLE_DRIVE_FOLDER_METODOLOGIA")
+            with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            pass
+    return {
+        "feedbacks": [],
+        "preferences": {},
+        "learned_patterns": []
+    }
 
-        pdf_processor = PDFProcessor(folder_40, folder_2, folder_metodologia)
 
-        return vector_store, agent, citation_manager, pdf_processor, text_validator
-    except Exception as e:
-        st.error(f"Erro ao inicializar componentes: {e}")
-        return None, None, None, None, None
+def save_long_term_memory(memory: dict):
+    """Salva memoria de longo prazo."""
+    MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
+        json.dump(memory, f, ensure_ascii=False, indent=2)
+
+
+def add_feedback_to_memory(feedback: str, context: dict):
+    """Adiciona feedback do usuario a memoria de longo prazo."""
+    memory = load_long_term_memory()
+
+    feedback_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "feedback": feedback,
+        "request": context.get("request", ""),
+        "section_type": context.get("section_type", ""),
+        "tone": context.get("tone", "")
+    }
+
+    memory["feedbacks"].append(feedback_entry)
+
+    # Extrai padroes do feedback para aprendizado
+    feedback_lower = feedback.lower()
+
+    # Detecta preferencias de estilo
+    if "mais formal" in feedback_lower or "muito informal" in feedback_lower:
+        memory["preferences"]["tone_preference"] = "mais formal"
+    elif "menos formal" in feedback_lower or "mais acessivel" in feedback_lower:
+        memory["preferences"]["tone_preference"] = "menos formal"
+
+    # Detecta preferencias de tamanho
+    if "mais curto" in feedback_lower or "resumir" in feedback_lower:
+        memory["preferences"]["length_preference"] = "mais curto"
+    elif "mais longo" in feedback_lower or "expandir" in feedback_lower or "mais detalhes" in feedback_lower:
+        memory["preferences"]["length_preference"] = "mais longo"
+
+    # Detecta preferencias de citacoes
+    if "mais citacoes" in feedback_lower:
+        memory["preferences"]["citation_preference"] = "mais citacoes"
+    elif "menos citacoes" in feedback_lower:
+        memory["preferences"]["citation_preference"] = "menos citacoes"
+
+    # Armazena padroes aprendidos
+    if len(feedback) > 20:
+        memory["learned_patterns"].append({
+            "pattern": feedback,
+            "context": context.get("section_type", "generico")
+        })
+        # Limita a 50 padroes
+        memory["learned_patterns"] = memory["learned_patterns"][-50:]
+
+    save_long_term_memory(memory)
+    return memory
+
+
+def get_memory_context() -> str:
+    """Gera contexto baseado na memoria de longo prazo."""
+    memory = load_long_term_memory()
+    context_parts = []
+
+    # Adiciona preferencias
+    prefs = memory.get("preferences", {})
+    if prefs:
+        pref_text = []
+        if prefs.get("tone_preference"):
+            pref_text.append(f"- Tom: {prefs['tone_preference']}")
+        if prefs.get("length_preference"):
+            pref_text.append(f"- Tamanho: {prefs['length_preference']}")
+        if prefs.get("citation_preference"):
+            pref_text.append(f"- Citacoes: {prefs['citation_preference']}")
+
+        if pref_text:
+            context_parts.append("PREFERENCIAS DO USUARIO:\n" + "\n".join(pref_text))
+
+    # Adiciona feedbacks recentes (ultimos 5)
+    recent_feedbacks = memory.get("feedbacks", [])[-5:]
+    if recent_feedbacks:
+        fb_text = ["FEEDBACKS ANTERIORES:"]
+        for fb in recent_feedbacks:
+            fb_text.append(f"- {fb['feedback']}")
+        context_parts.append("\n".join(fb_text))
+
+    return "\n\n".join(context_parts) if context_parts else ""
 
 
 def save_to_history(text: str, user_request: str):
@@ -117,206 +179,42 @@ def export_to_docx(text: str, filename: str = "output.docx"):
     """Exporta texto para formato DOCX."""
     try:
         from docx import Document
-        from docx.shared import Pt, Inches
+        from docx.shared import Pt
         from docx.enum.text import WD_ALIGN_PARAGRAPH
 
         doc = Document()
 
-        # Configuracoes de estilo
         style = doc.styles['Normal']
         font = style.font
         font.name = 'Times New Roman'
         font.size = Pt(12)
 
-        # Adiciona texto
         paragraphs = text.split('\n\n')
         for para_text in paragraphs:
             if para_text.strip():
                 p = doc.add_paragraph(para_text.strip())
                 p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 
-        # Salva
         output_path = Path("outputs") / filename
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         doc.save(output_path)
 
         return output_path
     except ImportError:
-        st.warning("Biblioteca python-docx nao disponivel. Instalando...")
         return None
 
 
-def render_article_management_tab(pdf_processor, vector_store):
-    """Renderiza a aba de gestao de artigos."""
-    st.subheader("Gestao de Artigos")
-
-    # Contadores por categoria
-    pdf_status = pdf_processor.check_pdfs_exist()
-    counts = pdf_status.get('counts', {})
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Metodologia", counts.get('metodologia', 0))
-    with col2:
-        st.metric("Principais", counts.get('principais_2', 0))
-    with col3:
-        st.metric("Base", counts.get('base_40', 0))
-
-    st.markdown("---")
-
-    # Upload de PDF para metodologia
-    st.subheader("Upload de Artigo Metodologico")
-    st.info("Faca upload do artigo que servira como base metodologica (ex: Garcia Lopez GPET)")
-
-    uploaded_file = st.file_uploader(
-        "Selecione o PDF",
-        type=['pdf'],
-        key="methodology_uploader",
-        help="Este artigo tera prioridade maxima na geracao de textos"
-    )
-
-    if uploaded_file is not None:
-        st.write(f"Arquivo: **{uploaded_file.name}**")
-
-        if st.button("Adicionar como Metodologia", type="primary"):
-            with st.spinner("Processando PDF..."):
-                try:
-                    # Salva e processa o PDF
-                    pdf_data = pdf_processor.upload_single_pdf(
-                        uploaded_file,
-                        uploaded_file.name,
-                        category='metodologia'
-                    )
-
-                    if pdf_data:
-                        # Adiciona ao vector store
-                        vector_store.add_single_document(pdf_data)
-                        st.success(f"'{uploaded_file.name}' adicionado como metodologia!")
-                        st.rerun()
-                    else:
-                        st.error("Erro ao processar o PDF")
-                except Exception as e:
-                    st.error(f"Erro: {e}")
-
-    st.markdown("---")
-
-    # Lista de artigos por categoria
-    st.subheader("Artigos Indexados")
-
-    pdfs_by_category = pdf_processor.get_pdfs_by_category()
-
-    # Metodologia
-    with st.expander("METODOLOGIA (Prioridade Maxima)", expanded=True):
-        if pdfs_by_category['metodologia']:
-            for pdf in pdfs_by_category['metodologia']:
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.write(f"{pdf}")
-                with col2:
-                    if st.button("Remover", key=f"del_met_{pdf}"):
-                        pdf_processor.remove_pdf(pdf, 'metodologia')
-                        vector_store.remove_document(pdf)
-                        st.rerun()
-        else:
-            st.write("_Nenhum artigo de metodologia_")
-
-    # Principais
-    with st.expander("PRINCIPAIS (Alta Prioridade)"):
-        if pdfs_by_category['principais_2']:
-            for pdf in pdfs_by_category['principais_2']:
-                st.write(f"{pdf}")
-        else:
-            st.write("_Nenhum artigo principal_")
-
-    # Base
-    with st.expander("BASE (Contexto)"):
-        if pdfs_by_category['base_40']:
-            for pdf in pdfs_by_category['base_40']:
-                st.write(f"{pdf}")
-        else:
-            st.write("_Nenhum artigo base_")
-
-    st.markdown("---")
-
-    # Botao de reindexacao
-    if st.button("Reindexar Toda a Base", use_container_width=True):
-        with st.spinner("Processando e indexando todos os PDFs..."):
-            try:
-                pdfs_data = pdf_processor.process_all_pdfs()
-                vector_store.add_documents(pdfs_data, force_reindex=True)
-                st.success(f"{len(pdfs_data)} PDFs reindexados!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Erro: {e}")
-
-
-def render_validation_results(validation_report):
-    """Renderiza os resultados da validacao."""
-    if not validation_report:
-        return
-
-    st.markdown("---")
-    st.subheader("Validacao do Texto")
-
-    # Status geral
-    if validation_report['valid']:
-        st.success(f"{validation_report['summary']}")
-    else:
-        st.warning(f"{validation_report['summary']}")
-
-    # Fontes utilizadas
-    sources_used = validation_report.get('sources_used', {})
-    if sources_used and any(sources_used.values()):
-        with st.expander("Fontes Utilizadas na Geracao", expanded=True):
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                st.markdown("**Metodologia**")
-                metodologia_sources = sources_used.get('metodologia', [])
-                if metodologia_sources:
-                    for src in metodologia_sources:
-                        st.write(f"- {src}")
-                else:
-                    st.caption("_Nenhuma fonte de metodologia utilizada_")
-
-            with col2:
-                st.markdown("**Principais**")
-                principais_sources = sources_used.get('principais_2', [])
-                if principais_sources:
-                    for src in principais_sources:
-                        st.write(f"- {src}")
-                else:
-                    st.caption("_Nenhuma fonte principal utilizada_")
-
-            with col3:
-                st.markdown("**Base**")
-                base_sources = sources_used.get('base_40', [])
-                if base_sources:
-                    for src in base_sources:
-                        st.write(f"- {src}")
-                else:
-                    st.caption("_Nenhuma fonte base utilizada_")
-
-    # Alertas
-    alerts = validation_report.get('alerts', [])
-    if alerts:
-        with st.expander("Detalhes da Validacao", expanded=not validation_report['valid']):
-            for alert in alerts:
-                if alert.level == 'error':
-                    st.error(f"[{alert.category}] {alert.message}")
-                elif alert.level == 'warning':
-                    st.warning(f"[{alert.category}] {alert.message}")
-                else:
-                    st.info(f"[{alert.category}] {alert.message}")
-
-                if alert.suggestion:
-                    st.caption(f"Sugestao: {alert.suggestion}")
-
-    # Recomendacoes
-    recommendations = validation_report.get('recommendations', [])
-    if recommendations:
-        with st.expander("Recomendacoes"):
-            for rec in recommendations:
-                st.write(f"- {rec}")
+@st.cache_resource
+def init_components():
+    """Inicializa componentes da aplicacao."""
+    try:
+        vector_store = VectorStore()
+        agent = ClaudeAgent()
+        citation_manager = CitationManager()
+        return vector_store, agent, citation_manager
+    except Exception as e:
+        st.error(f"Erro ao inicializar componentes: {e}")
+        return None, None, None
 
 
 def main():
@@ -324,50 +222,29 @@ def main():
 
     # Header
     st.markdown('<div class="main-header">TCC Agent - Assistente de Escrita Academica</div>', unsafe_allow_html=True)
-    st.markdown("---")
 
     # Inicializa componentes
     components = init_components()
-    if len(components) == 5:
-        vector_store, agent, citation_manager, pdf_processor, text_validator = components
-    else:
+    if not components or not all(components):
         st.error("Erro ao inicializar aplicacao. Verifique as configuracoes.")
         return
 
-    if not all([vector_store, agent, citation_manager, pdf_processor]):
-        st.error("Erro ao inicializar aplicacao. Verifique as configuracoes.")
-        return
+    vector_store, agent, citation_manager = components
 
     # Sidebar
     with st.sidebar:
         st.header("Configuracoes")
 
-        # Status da base de conhecimento
-        st.subheader("Status da Base")
+        # Status da base
         stats = vector_store.get_stats()
-
         if stats['ready']:
             st.success(f"{stats['total_chunks']} chunks indexados")
-
-            # Mostra por categoria com indicadores visuais
-            cat_display = {
-                'metodologia': 'Metodologia',
-                'principais_2': 'Principais',
-                'base_40': 'Base'
-            }
-            for cat, count in stats['by_category'].items():
-                display_name = cat_display.get(cat, cat)
-                st.write(f"  {display_name}: {count}")
-
-            # Alerta se nao ha metodologia
-            if not stats.get('has_metodologia', False):
-                st.warning("Nenhum artigo de metodologia indexado!")
         else:
             st.warning("Base vetorial vazia")
 
         st.markdown("---")
 
-        # Configuracoes de geracao
+        # Parametros
         st.subheader("Parametros")
 
         section_type = st.selectbox(
@@ -395,277 +272,155 @@ def main():
             }[x]
         )
 
-        # Nova opcao: usar hierarquia
-        use_hierarchy = st.checkbox(
-            "Usar hierarquia de documentos",
-            value=True,
-            help="Prioriza: Metodologia > Principais > Base"
-        )
-
-        if use_hierarchy:
-            st.caption("Hierarquia ativa")
-            with st.expander("Ajustar hierarquia"):
-                n_metodologia = st.slider("Chunks de metodologia:", 0, 5, 2)
-                n_principais = st.slider("Chunks principais:", 0, 5, 3)
-                n_base = st.slider("Chunks da base:", 0, 10, 5)
-            category_filter = None
-        else:
-            n_metodologia, n_principais, n_base = 2, 3, 5
-            category_filter = st.radio(
-                "Base de conhecimento:",
-                [None, "metodologia", "principais_2", "base_40"],
-                format_func=lambda x: {
-                    None: "Todos",
-                    "metodologia": "Metodologia",
-                    "principais_2": "Principais",
-                    "base_40": "Base"
-                }[x]
-            )
-
-        n_context_chunks = st.slider("Chunks de contexto:", 3, 15, 10)
-
         include_citations = st.checkbox("Incluir citacoes", value=True)
-
-        # Validacao automatica
-        auto_validate = st.checkbox(
-            "Validar automaticamente",
-            value=True,
-            help="Verifica uso de metodologia e contradicoes"
-        )
 
         st.markdown("---")
 
-        # Acoes administrativas
-        st.subheader("Gerenciamento")
+        # Memoria de longo prazo
+        st.subheader("Memoria")
+        memory = load_long_term_memory()
 
-        if st.button("Baixar PDFs do Drive"):
-            with st.spinner("Baixando PDFs..."):
-                pdf_status = pdf_processor.check_pdfs_exist()
-                if pdf_status['all_ready']:
-                    st.info("PDFs ja existem localmente")
-                else:
-                    success = pdf_processor.download_all_pdfs()
-                    if success:
-                        st.success("PDFs baixados com sucesso!")
-                        st.rerun()
-                    else:
-                        st.error("Erro ao baixar PDFs")
+        prefs = memory.get("preferences", {})
+        if prefs:
+            st.caption("Preferencias aprendidas:")
+            for key, value in prefs.items():
+                st.write(f"- {key}: {value}")
 
-        if st.button("Reindexar PDFs"):
-            with st.spinner("Processando e indexando PDFs..."):
-                try:
-                    pdfs_data = pdf_processor.process_all_pdfs()
-                    vector_store.add_documents(pdfs_data, force_reindex=True)
-                    st.success(f"{len(pdfs_data)} PDFs indexados!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro: {e}")
+        fb_count = len(memory.get("feedbacks", []))
+        st.caption(f"{fb_count} feedbacks armazenados")
 
-        # Limpar base vetorial com confirmacao
-        if 'confirm_clear' not in st.session_state:
-            st.session_state.confirm_clear = False
+        if st.button("Limpar Memoria"):
+            save_long_term_memory({"feedbacks": [], "preferences": {}, "learned_patterns": []})
+            st.success("Memoria limpa!")
+            st.rerun()
 
-        if st.button("Limpar Base Vetorial"):
-            st.session_state.confirm_clear = True
+    # Inicializa estado do chat
+    if 'messages' not in st.session_state:
+        st.session_state.messages = []
 
-        if st.session_state.confirm_clear:
-            st.warning("Tem certeza que deseja limpar a base vetorial?")
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Sim, limpar"):
-                    vector_store.reset()
-                    st.success("Base vetorial limpa!")
-                    st.session_state.confirm_clear = False
-                    st.rerun()
-            with col2:
-                if st.button("Cancelar"):
-                    st.session_state.confirm_clear = False
-                    st.rerun()
+    if 'awaiting_feedback' not in st.session_state:
+        st.session_state.awaiting_feedback = False
 
-    # Area principal com abas
-    tab1, tab2 = st.tabs(["Geracao de Texto", "Gestao de Artigos"])
+    if 'last_context' not in st.session_state:
+        st.session_state.last_context = {}
 
-    with tab2:
-        render_article_management_tab(pdf_processor, vector_store)
+    # Container do chat
+    chat_container = st.container()
 
-    with tab1:
-        col1, col2 = st.columns([1, 1])
+    # Exibe historico de mensagens
+    with chat_container:
+        for i, message in enumerate(st.session_state.messages):
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
 
-        with col1:
-            st.subheader("Sua Solicitacao")
+                # Acoes para mensagens do assistente
+                if message["role"] == "assistant" and message.get("show_actions"):
+                    col1, col2, col3 = st.columns(3)
 
-            user_request = st.text_area(
-                "O que voce quer escrever?",
-                height=200,
-                placeholder="Ex: Escreva uma introducao sobre a importancia da analise tatica no futebol moderno...",
-                help="Seja especifico para melhores resultados"
-            )
+                    with col1:
+                        if st.button("Salvar", key=f"save_{i}"):
+                            filepath = save_to_history(message["content"], message.get("request", ""))
+                            st.success(f"Salvo: {filepath.name}")
 
-            col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
+                    with col2:
+                        if st.button("DOCX", key=f"docx_{i}"):
+                            docx_path = export_to_docx(message["content"])
+                            if docx_path:
+                                st.success(f"Exportado: {docx_path.name}")
 
-            with col_btn1:
-                generate_btn = st.button("Gerar Texto", type="primary", use_container_width=True)
+                    with col3:
+                        if st.button("Citacoes", key=f"cite_{i}"):
+                            citations = citation_manager.extract_citations(message["content"])
+                            st.write(f"**{len(citations)} citacoes**")
+                            for c in citations:
+                                st.write(f"- {c['author']} ({c['year']})")
 
-            with col_btn2:
-                examples_btn = st.button("Ver Exemplos", use_container_width=True)
+                # Feedback para mensagens do assistente
+                if message["role"] == "assistant" and message.get("show_actions"):
+                    with st.expander("Dar feedback", expanded=False):
+                        feedback_key = f"feedback_{i}"
+                        feedback = st.text_input(
+                            "Como posso melhorar?",
+                            key=feedback_key,
+                            placeholder="Ex: mais formal, menos citacoes, mais detalhes..."
+                        )
+                        if st.button("Enviar Feedback", key=f"fb_btn_{i}"):
+                            if feedback:
+                                context = {
+                                    "request": message.get("request", ""),
+                                    "section_type": section_type,
+                                    "tone": tone
+                                }
+                                add_feedback_to_memory(feedback, context)
+                                st.success("Feedback salvo! Vou lembrar para proximas geracoes.")
 
-            with col_btn3:
-                summary_btn = st.button("Resumir Artigos", use_container_width=True)
+    # Input do chat
+    if prompt := st.chat_input("Digite sua solicitacao..."):
+        # Adiciona mensagem do usuario
+        st.session_state.messages.append({"role": "user", "content": prompt})
 
-            # Botao de exemplos
-            if examples_btn:
-                with st.expander("Exemplos de Prompts", expanded=True):
-                    st.markdown(USAGE_EXAMPLES)
+        with st.chat_message("user"):
+            st.markdown(prompt)
 
-            # Botao de resumo
-            if summary_btn:
-                with st.spinner("Gerando resumo dos artigos..."):
-                    try:
-                        summary = agent.summarize_articles(category=category_filter, max_articles=5)
-                        st.info("**Resumo dos Artigos:**\n\n" + summary)
-                    except Exception as e:
-                        st.error(f"Erro ao gerar resumo: {e}")
-
-        with col2:
-            st.subheader("Texto Gerado")
-
-            # Container para o resultado
-            result_container = st.container()
-
-            # Sessao para armazenar resultado
-            if 'generated_text' not in st.session_state:
-                st.session_state.generated_text = ""
-
-            if 'current_request' not in st.session_state:
-                st.session_state.current_request = ""
-
-            if 'validation_report' not in st.session_state:
-                st.session_state.validation_report = None
-
-            if 'context_used' not in st.session_state:
-                st.session_state.context_used = ""
-
-        # Geracao de texto
-        if generate_btn and user_request:
+        # Gera resposta
+        with st.chat_message("assistant"):
             with st.spinner("Gerando texto academico..."):
                 try:
-                    # Gera texto com captura do contexto
+                    # Obtem contexto da memoria de longo prazo
+                    memory_context = get_memory_context()
+
+                    # Ajusta prompt com contexto da memoria
+                    enhanced_prompt = prompt
+                    if memory_context:
+                        enhanced_prompt = f"{memory_context}\n\nSOLICITACAO ATUAL:\n{prompt}"
+
                     generated_text, context_used = agent.generate_text_with_sources(
-                        user_request=user_request,
+                        user_request=enhanced_prompt,
                         section_type=section_type,
                         word_count=word_count,
                         tone=tone,
                         include_citations=include_citations,
-                        use_hierarchy=use_hierarchy,
-                        n_metodologia=n_metodologia,
-                        n_principais=n_principais,
-                        n_base=n_base,
-                        category_filter=category_filter,
-                        n_context_chunks=n_context_chunks
+                        use_hierarchy=True
                     )
 
-                    st.session_state.generated_text = generated_text
-                    st.session_state.current_request = user_request
-                    st.session_state.context_used = context_used
+                    st.markdown(generated_text)
 
-                    # Validacao automatica
-                    if auto_validate:
-                        with st.spinner("Validando texto..."):
-                            validation_report = agent.validate_generated_text(
-                                generated_text,
-                                context_used=context_used
-                            )
-                            st.session_state.validation_report = validation_report
-                    else:
-                        st.session_state.validation_report = None
+                    # Salva contexto para feedback
+                    st.session_state.last_context = {
+                        "request": prompt,
+                        "section_type": section_type,
+                        "tone": tone
+                    }
+
+                    # Adiciona ao historico
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": generated_text,
+                        "show_actions": True,
+                        "request": prompt
+                    })
 
                 except Exception as e:
-                    st.error(f"Erro ao gerar texto: {e}")
+                    error_msg = f"Erro ao gerar texto: {e}"
+                    st.error(error_msg)
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": error_msg,
+                        "show_actions": False
+                    })
 
-        # Exibe resultado
-        with result_container:
-            if st.session_state.generated_text:
-                st.text_area(
-                    "Resultado:",
-                    value=st.session_state.generated_text,
-                    height=400,
-                    label_visibility="collapsed"
-                )
-
-                # Exibe validacao se houver
-                if st.session_state.validation_report:
-                    render_validation_results(st.session_state.validation_report)
-
-                    # Botao de regenerar se houver problemas
-                    if not st.session_state.validation_report.get('valid', True):
-                        if st.button("Regenerar com Ajustes", type="secondary"):
-                            with st.spinner("Regenerando texto com correcoes..."):
-                                try:
-                                    new_text = agent.regenerate_with_fixes(
-                                        st.session_state.current_request,
-                                        st.session_state.validation_report,
-                                        st.session_state.generated_text
-                                    )
-                                    st.session_state.generated_text = new_text
-
-                                    # Revalida
-                                    new_validation = agent.validate_generated_text(new_text)
-                                    st.session_state.validation_report = new_validation
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Erro ao regenerar: {e}")
-
-                # Acoes pos-geracao
-                st.markdown("---")
-                col_action1, col_action2, col_action3, col_action4 = st.columns(4)
-
-                with col_action1:
-                    if st.button("Salvar Historico"):
-                        filepath = save_to_history(
-                            st.session_state.generated_text,
-                            st.session_state.current_request
-                        )
-                        st.success(f"Salvo em: {filepath.name}")
-
-                with col_action2:
-                    if st.button("Export DOCX"):
-                        docx_path = export_to_docx(st.session_state.generated_text)
-                        if docx_path:
-                            st.success(f"Exportado: {docx_path.name}")
-
-                with col_action3:
-                    if st.button("Analisar Citacoes"):
-                        with st.expander("Analise de Citacoes", expanded=True):
-                            citations = citation_manager.extract_citations(st.session_state.generated_text)
-                            st.write(f"**Total de citacoes:** {len(citations)}")
-
-                            if citations:
-                                st.write("**Autores citados:**")
-                                for c in citations:
-                                    st.write(f"  - {c['author']} ({c['year']})")
-
-                            suggestions = citation_manager.suggest_citation_improvements(
-                                st.session_state.generated_text
-                            )
-                            st.write("\n**Sugestoes:**")
-                            for s in suggestions:
-                                st.write(s)
-
-                with col_action4:
-                    if st.button("Limpar"):
-                        st.session_state.generated_text = ""
-                        st.session_state.current_request = ""
-                        st.session_state.validation_report = None
-                        st.rerun()
-            else:
-                st.info("Digite sua solicitacao e clique em 'Gerar Texto'")
+    # Botao para limpar chat
+    if st.session_state.messages:
+        if st.button("Limpar Conversa", use_container_width=True):
+            st.session_state.messages = []
+            st.rerun()
 
     # Footer
     st.markdown("---")
     st.markdown("""
         <div style='text-align: center; color: #666;'>
             <p>TCC Agent - Assistente Academico com IA</p>
-            <p style='font-size: 0.9rem;'>Powered by Claude Sonnet 4.5 | ChromaDB | LangChain</p>
+            <p style='font-size: 0.9rem;'>Powered by Claude Sonnet 4.5 | ChromaDB</p>
         </div>
     """, unsafe_allow_html=True)
 
